@@ -1,4 +1,3 @@
-// 题目#1
 // 编写一个质押挖矿合约，实现如下功能:
 // 1.用户随时可以质押项目方代币 RNT(自定义的ERC20)，开始赚取项目方Token(esRNT);
 // 2.可随时解押提取已质押的 RNT;
@@ -14,83 +13,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import "src/RNT.sol";
+import "src/esRNT.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-
-
-contract RNT is ERC20Permit {
-
-    constructor() ERC20Permit("RNT") ERC20("RNT", "RNT") {
-        _mint( msg.sender, 10 ** 28);
-     }
-
-}
-
-contract esRNT is ERC20 {
-    
-    struct LockInfo {
-        address user;
-        uint256 amount;
-        uint256 lockTime;
-    }
-    
-    LockInfo[] public locks;
-    RNT public rnt;
-    Stake public stake;
-
-    constructor(address _rnt,address _stake) ERC20("esRNT", "esRNT") {
-        rnt = RNT(_rnt);
-        stake = Stake(_stake);
-    }
-
-    modifier onlyStakeowner {
-        require(msg.sender == address(stake), "Onlyowner: only stake owner can call this function");
-        _;
-    }
-
-    function mint(address to, uint256 amount) external onlyStakeowner {
-        // 给用户铸造esRNT
-        _mint(to, amount);
-        // 记录锁仓信息
-        locks.push(LockInfo({
-            user: to,
-            amount: amount,
-            lockTime: block.timestamp
-        }));
-    }
-
-    function redeem(uint256 id) external {
-        require(id < locks.length, "Invalid lock ID");
-        LockInfo storage lockInfo = locks[id];
-        require(lockInfo.user == msg.sender, "Not the lock owner");
-
-        // 计算解锁的数量
-        uint256 timePassed = block.timestamp - lockInfo.lockTime;
-        uint256 unlocked = lockInfo.amount * timePassed / 30 days;
- 
-        if (unlocked > lockInfo.amount) {
-            unlocked = lockInfo.amount; // 防止超过锁定数量
-        }
-
-        // 转移解锁的RNT给用户
-        rnt.transfer(lockInfo.user, unlocked);
-        // 销毁未解锁的部分
-        uint256 lockedAmount = lockInfo.amount - unlocked;
-        if (lockedAmount > 0) {
-            rnt.transfer(address(0x0000000000000000000000000000000000000000), lockedAmount);
-        }
-
-        // 销毁esRNT
-        _burn(msg.sender, lockInfo.amount);
-
-        // 清理锁仓信息
-        delete locks[id];
-    }
-
-}
-
-
 
 contract Stake {
 
@@ -107,7 +32,15 @@ contract Stake {
         uint256 lastUpdateTime;
     }
 
+        struct LockInfo {
+        address user;
+        uint256 amount;
+        uint256 lockTime;
+    }
+
     mapping(address => StakeInfo) public stakeInfo;
+
+    LockInfo[] public locks;
 
     event Staked(address indexed user, uint256 amount);
     event Unstaked(address indexed user, uint256 amount);
@@ -152,7 +85,13 @@ contract Stake {
         info.lastUpdateTime = block.timestamp;
         info.unclaimed = 0;
         rnt.approve(address(esrnt), rewards);
+        esrnt.approve(msg.sender, rewards);
         esrnt.mint(msg.sender, rewards);
+        locks.push(LockInfo({
+            user: msg.sender,
+            amount: rewards,
+            lockTime: block.timestamp
+        }));
         emit Claimed(msg.sender, rewards);
     }
 
@@ -167,6 +106,18 @@ contract Stake {
         uint256 timePassed = block.timestamp - info.lastUpdateTime;
         uint256 rewards = info.unclaimed + (info.amount * timePassed * rewardPerSecond) / 1e18;
         return rewards;
+    }
+    function redeem(uint256 id) external {
+        require(id < locks.length, "Invalid lock ID");
+        LockInfo storage lockInfo = locks[id];
+        uint256 timePassed = block.timestamp - lockInfo.lockTime;
+        uint256 unlocked = lockInfo.amount * timePassed / 30 days;
+        if (unlocked > lockInfo.amount) {unlocked = lockInfo.amount;}
+        rnt.approve(address(this), unlocked);
+        rnt.approve(msg.sender, unlocked);
+        rnt.transferFrom(address(this), msg.sender, unlocked);
+        esrnt.burn(msg.sender, lockInfo.amount);
+        delete locks[id];
     }
 
  }
